@@ -1,0 +1,15 @@
+[package]
+name = "webhook-handler"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+dotenv = "0.15"
+futures-util = "0.3"
+hex = "0.4"
+hmac-sha256 = "0.1"
+hyper = { version = "0.14", features = ["full"] }
+json = "0.12"
+lazy_static = "1.4"
+tokio = { version = "1", features = ["full"] }
