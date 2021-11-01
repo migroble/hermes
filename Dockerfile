@@ -22,7 +22,7 @@ COPY src src
 RUN touch src/main.rs
 
 # Build executable
-RUN cargo build --release --target $TARGET && mv target/$TARGET/release/$NAME /app
+RUN cargo build --features mimalloc --release --target $TARGET && mv target/$TARGET/release/$NAME /app
 
 ## Runner image
 

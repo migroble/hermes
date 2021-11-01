@@ -30,6 +30,10 @@ use utils::{
 mod config;
 use config::Config;
 
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 static PKG_NAME: &str = env!("CARGO_PKG_NAME");
 
 lazy_static! {
