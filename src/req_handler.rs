@@ -80,10 +80,10 @@ impl Service<Request<Body>> for ReqHandler {
                             &SSH_KEY,
                             data["ssh_url"].as_str().unwrap(),
                             &repo_path,
-                        );
+                        )?;
 
                         if repo_path.join("Dockerfile").is_file() {
-                            build_image(&DOCKER, name, &repo_path).await;
+                            build_image(&DOCKER, name, &repo_path).await?;
 
                             let config_path = [&CONFIGS_DIR, name]
                                 .iter()
@@ -95,8 +95,8 @@ impl Service<Request<Body>> for ReqHandler {
                                 if name == PKG_NAME {
                                     tx.send(config).await.unwrap();
                                 } else {
-                                    stop_container(&DOCKER, &config).await;
-                                    run_container(&DOCKER, config).await;
+                                    stop_container(&DOCKER, &config).await?;
+                                    run_container(&DOCKER, config).await?;
                                 }
                             }
                         }

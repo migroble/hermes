@@ -42,6 +42,6 @@ async fn main() {
     }
 
     if let Some(cfg) = config {
-        run_container(&DOCKER, cfg).await;
+        run_container(&DOCKER, cfg).await.unwrap();
     }
 }

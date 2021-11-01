@@ -67,6 +67,7 @@ pub mod git {
 
 pub mod docker {
     use crate::config::Config;
+    use anyhow::Result;
     use bollard::{
         container::{Config as ContainerConfig, CreateContainerOptions, StartContainerOptions},
         image::BuildImageOptions,
@@ -77,10 +78,10 @@ pub mod docker {
     use std::path::Path;
     use tar::Builder;
 
-    pub async fn build_image(docker: &Docker, name: &str, repo_path: &Path) {
+    pub async fn build_image(docker: &Docker, name: &str, repo_path: &Path) -> Result<()> {
         let mut tar_file = Builder::new(Vec::new());
-        tar_file.append_dir_all(".", repo_path).unwrap();
-        let tar_file = tar_file.into_inner().unwrap();
+        tar_file.append_dir_all(".", repo_path)?;
+        let tar_file = tar_file.into_inner()?;
 
         let mut stream = docker.build_image(
             BuildImageOptions {
@@ -93,16 +94,18 @@ pub mod docker {
             Some(tar_file.into()),
         );
 
-        while let Some(res) = stream.next().await {
-            println!("{:#?}", res);
-        }
+        while stream.next().await.is_some() {}
+
+        Ok(())
     }
 
-    pub async fn stop_container(docker: &Docker, config: &Config) {
-        docker.stop_container(&config.name, None).await.unwrap();
+    pub async fn stop_container(docker: &Docker, config: &Config) -> Result<()> {
+        docker.stop_container(&config.name, None).await?;
+
+        Ok(())
     }
 
-    pub async fn run_container(docker: &Docker, config: Config) {
+    pub async fn run_container(docker: &Docker, config: Config) -> Result<()> {
         let co = CreateContainerOptions {
             name: config.name.clone(),
         };
@@ -117,10 +120,11 @@ pub mod docker {
             ..Default::default()
         };
 
-        docker.create_container(Some(co), cc).await.unwrap();
+        docker.create_container(Some(co), cc).await?;
         docker
             .start_container(&config.name, None::<StartContainerOptions<String>>)
-            .await
-            .unwrap();
+            .await?;
+
+        Ok(())
     }
 }
