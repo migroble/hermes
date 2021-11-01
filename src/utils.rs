@@ -99,9 +99,11 @@ pub mod docker {
         }
     }
 
-    pub async fn restart_containers(docker: &Docker, config: Config) {
+    pub async fn stop_container(docker: &Docker, config: &Config) {
         docker.stop_container(&config.name, None).await.unwrap();
+    }
 
+    pub async fn run_container(docker: &Docker, config: Config) {
         let co = CreateContainerOptions {
             name: config.name.clone(),
         };
