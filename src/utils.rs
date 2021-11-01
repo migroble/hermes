@@ -1,5 +1,5 @@
 pub mod git {
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use git2::{
         build::{CheckoutBuilder, RepoBuilder},
         Cred, FetchOptions, RebaseOptions, RemoteCallbacks, Repository,
@@ -30,7 +30,9 @@ pub mod git {
         let mut builder = RepoBuilder::new();
         builder.fetch_options(fetch_options(ssh_key));
 
-        builder.clone(url, path)?;
+        builder
+            .clone(url, path)
+            .context(format!("unable to clone {}", url))?;
 
         Ok(true)
     }
@@ -38,16 +40,26 @@ pub mod git {
     pub fn fetch(ssh_key: &KeyPair, url: &str, path: &Path) -> Result<bool> {
         let repo = Repository::open(path)?;
         let mut remote = repo.find_remote("origin")?;
-        remote.fetch(&["main"], Some(&mut fetch_options(ssh_key)), None)?;
-        let fetchhead =
-            repo.annotated_commit_from_fetchhead("main", url, &repo.refname_to_id("FETCH_HEAD")?)?;
+        remote
+            .fetch(&["main"], Some(&mut fetch_options(ssh_key)), None)
+            .context(format!("unable to fetch {}", url))?;
+        // Since we just fetched, we are guaranteed to have a FETCH_HEAD, so we can unwrap safely
+        let fetchhead = repo
+            .annotated_commit_from_fetchhead(
+                "main",
+                url,
+                &repo.refname_to_id("FETCH_HEAD").unwrap(),
+            )
+            .unwrap();
 
         let mut cb = CheckoutBuilder::new();
         cb.force();
         let mut ro = RebaseOptions::new();
         ro.checkout_options(cb);
 
-        let rebase = repo.rebase(None, Some(&fetchhead), None, Some(&mut ro))?;
+        let rebase = repo
+            .rebase(None, Some(&fetchhead), None, Some(&mut ro))
+            .context(format!("unable to rebase {:#?}", path))?;
         if rebase.len() == 0 {
             Ok(false)
         } else {
@@ -67,7 +79,7 @@ pub mod git {
 
 pub mod docker {
     use crate::config::Config;
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use bollard::{
         container::{Config as ContainerConfig, CreateContainerOptions, StartContainerOptions},
         image::BuildImageOptions,
@@ -80,8 +92,12 @@ pub mod docker {
 
     pub async fn build_image(docker: &Docker, name: &str, repo_path: &Path) -> Result<()> {
         let mut tar_file = Builder::new(Vec::new());
-        tar_file.append_dir_all(".", repo_path)?;
-        let tar_file = tar_file.into_inner()?;
+        tar_file.append_dir_all(".", repo_path).context(format!(
+            "unable to append files in {:#?} to tar file",
+            repo_path
+        ))?;
+        // Writing to a Vec is infallible, we can unwrap safely
+        let tar_file = tar_file.into_inner().unwrap();
 
         let mut stream = docker.build_image(
             BuildImageOptions {
@@ -100,7 +116,13 @@ pub mod docker {
     }
 
     pub async fn stop_container(docker: &Docker, config: &Config) -> Result<()> {
-        docker.stop_container(&config.name, None).await?;
+        docker
+            .stop_container(&config.name, None)
+            .await
+            .context(format!(
+                "unable to stop Docker container {:#?}",
+                config.name
+            ))?;
 
         Ok(())
     }
@@ -120,10 +142,20 @@ pub mod docker {
             ..Default::default()
         };
 
-        docker.create_container(Some(co), cc).await?;
+        docker
+            .create_container(Some(co), cc)
+            .await
+            .context(format!(
+                "unable to create Docker container {:#?}",
+                config.name
+            ))?;
         docker
             .start_container(&config.name, None::<StartContainerOptions<String>>)
-            .await?;
+            .await
+            .context(format!(
+                "unable to start Docker container {:#?}",
+                config.name
+            ))?;
 
         Ok(())
     }
