@@ -33,6 +33,7 @@ use config::Config;
 static PKG_NAME: &str = env!("CARGO_PKG_NAME");
 
 lazy_static! {
+    static ref DOCKER: Docker = Docker::connect_with_local_defaults().unwrap();
     static ref SECRET: Vec<u8> = env::var("SECRET_TOKEN")
         .expect("Expected a secret token in the environment")
         .into_bytes();
@@ -48,7 +49,7 @@ lazy_static! {
 }
 
 struct Svc {
-    tx: mpsc::Sender<()>,
+    tx: mpsc::Sender<Config>,
 }
 
 impl Service<Request<Body>> for Svc {
@@ -90,8 +91,7 @@ impl Service<Request<Body>> for Svc {
                         );
 
                         if repo_path.join("Dockerfile").is_file() {
-                            let docker = Docker::connect_with_local_defaults().unwrap();
-                            build_image(&docker, name, &repo_path).await;
+                            build_image(&DOCKER, name, &repo_path).await;
 
                             let config_path = [&CONFIGS_DIR, name]
                                 .iter()
@@ -101,10 +101,10 @@ impl Service<Request<Body>> for Svc {
                                 let config = Config::from_file(config_path).await.unwrap();
 
                                 if name == PKG_NAME {
-                                    tx.send(()).await.unwrap();
+                                    tx.send(config).await.unwrap();
                                 } else {
-                                    stop_container(&docker, &config).await;
-                                    run_container(&docker, config).await;
+                                    stop_container(&DOCKER, &config).await;
+                                    run_container(&DOCKER, config).await;
                                 }
                             }
                         }
@@ -127,7 +127,7 @@ impl Service<Request<Body>> for Svc {
 }
 
 struct MakeSvc {
-    tx: mpsc::Sender<()>,
+    tx: mpsc::Sender<Config>,
 }
 
 impl<T> Service<T> for MakeSvc {
@@ -151,14 +151,19 @@ async fn main() {
     dotenv().ok();
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 4567));
-    let (tx, mut rx) = mpsc::channel::<()>(1);
+    let (tx, mut rx) = mpsc::channel::<Config>(1);
+    let mut config = None;
     let server = Server::bind(&addr)
         .serve(MakeSvc { tx })
         .with_graceful_shutdown(async {
-            rx.recv().await;
+            config = rx.recv().await;
         });
 
     if let Err(e) = server.await {
         eprintln!("Server error: {}", e);
+    }
+
+    if let Some(cfg) = config {
+        run_container(&DOCKER, cfg).await;
     }
 }
