@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate lazy_static;
 
+#[macro_use]
+extern crate log;
+
 use bollard::Docker;
 use dotenv::dotenv;
 use hyper::Server;
@@ -27,6 +30,7 @@ lazy_static! {
 #[tokio::main]
 async fn main() {
     dotenv().ok();
+    env_logger::init();
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 4567));
     let (tx, mut rx) = mpsc::channel::<Config>(1);
@@ -35,10 +39,12 @@ async fn main() {
         .serve(MakeReqHandler { tx })
         .with_graceful_shutdown(async {
             config = rx.recv().await;
+            info!("Self-update triggered");
         });
 
+    info!("Starting server");
     if let Err(e) = server.await {
-        eprintln!("Server error: {}", e);
+        error!("Server error: {}", e);
     }
 
     if let Some(cfg) = config {
