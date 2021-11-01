@@ -1,4 +1,5 @@
 pub mod git {
+    use anyhow::Result;
     use git2::{
         build::{CheckoutBuilder, RepoBuilder},
         Cred, FetchOptions, RebaseOptions, RemoteCallbacks, Repository,
@@ -14,7 +15,7 @@ pub mod git {
         let mut callbacks = RemoteCallbacks::new();
         callbacks.credentials(move |_url, username_from_url, _allowed_types| {
             Cred::ssh_key(
-                username_from_url.unwrap(),
+                username_from_url.unwrap_or("git"),
                 Some(&ssh_key.public),
                 &ssh_key.private,
                 None,
@@ -25,43 +26,41 @@ pub mod git {
         fo
     }
 
-    pub fn clone(ssh_key: &KeyPair, url: &str, path: &Path) {
+    pub fn clone(ssh_key: &KeyPair, url: &str, path: &Path) -> Result<bool> {
         let mut builder = RepoBuilder::new();
         builder.fetch_options(fetch_options(ssh_key));
 
-        builder.clone(url, path).unwrap();
+        builder.clone(url, path)?;
+
+        Ok(true)
     }
 
-    pub fn fetch(ssh_key: &KeyPair, url: &str, path: &Path) {
-        let repo = Repository::open(path).unwrap();
-        let mut remote = repo.find_remote("origin").unwrap();
-        remote
-            .fetch(&["main"], Some(&mut fetch_options(ssh_key)), None)
-            .unwrap();
-        let fetchhead = repo
-            .annotated_commit_from_fetchhead(
-                "main",
-                url,
-                &repo.refname_to_id("FETCH_HEAD").unwrap(),
-            )
-            .unwrap();
+    pub fn fetch(ssh_key: &KeyPair, url: &str, path: &Path) -> Result<bool> {
+        let repo = Repository::open(path)?;
+        let mut remote = repo.find_remote("origin")?;
+        remote.fetch(&["main"], Some(&mut fetch_options(ssh_key)), None)?;
+        let fetchhead =
+            repo.annotated_commit_from_fetchhead("main", url, &repo.refname_to_id("FETCH_HEAD")?)?;
 
         let mut cb = CheckoutBuilder::new();
         cb.force();
         let mut ro = RebaseOptions::new();
         ro.checkout_options(cb);
 
-        let rebase = repo
-            .rebase(None, Some(&fetchhead), None, Some(&mut ro))
-            .unwrap();
-        for _ in rebase {}
+        let rebase = repo.rebase(None, Some(&fetchhead), None, Some(&mut ro))?;
+        if rebase.len() == 0 {
+            Ok(false)
+        } else {
+            for _ in rebase {}
+            Ok(true)
+        }
     }
 
-    pub fn clone_or_fetch_repo(ssh_key: &KeyPair, url: &str, path: &Path) {
+    pub fn clone_or_fetch_repo(ssh_key: &KeyPair, url: &str, path: &Path) -> Result<bool> {
         if path.is_dir() {
-            fetch(ssh_key, url, path);
+            fetch(ssh_key, url, path)
         } else {
-            clone(ssh_key, url, path);
+            clone(ssh_key, url, path)
         }
     }
 }
