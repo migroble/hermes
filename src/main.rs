@@ -48,6 +48,8 @@ async fn main() {
     }
 
     if let Some(cfg) = config {
-        run_container(&DOCKER, cfg).await.unwrap();
+        // To avoid name collisions with itself when running in
+        // a container, we simply don't name the spawned container
+        run_container(&DOCKER, cfg, false).await.unwrap();
     }
 }

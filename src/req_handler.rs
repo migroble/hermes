@@ -78,7 +78,7 @@ fn trigger_update(name: String, repo_url: String, tx: mpsc::Sender<Config>) {
                 } else {
                     if let Err(why) = stop_container(&DOCKER, &config).await {
                         error!("Failed to stop container {}: {:#?}", name, why);
-                    } else if let Err(why) = run_container(&DOCKER, config).await {
+                    } else if let Err(why) = run_container(&DOCKER, config, true).await {
                         error!("Failed to start container {}: {:#?}", name, why);
                     }
                 }

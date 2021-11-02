@@ -131,10 +131,7 @@ pub mod docker {
         Ok(())
     }
 
-    pub async fn run_container(docker: &Docker, config: Config) -> Result<()> {
-        let co = CreateContainerOptions {
-            name: config.name.clone(),
-        };
+    pub async fn run_container(docker: &Docker, config: Config, named: bool) -> Result<()> {
         let cc = ContainerConfig {
             env: config.env,
             host_config: Some(HostConfig {
@@ -147,7 +144,16 @@ pub mod docker {
         };
 
         docker
-            .create_container(Some(co), cc)
+            .create_container(
+                if named {
+                    Some(CreateContainerOptions {
+                        name: config.name.clone(),
+                    })
+                } else {
+                    None
+                },
+                cc,
+            )
             .await
             .context(format!(
                 "unable to create Docker container {:#?}",
