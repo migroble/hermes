@@ -101,16 +101,17 @@ pub mod docker {
 
         let mut stream = docker.build_image(
             BuildImageOptions {
-                dockerfile: "Dockerfile",
                 t: name,
-                q: true,
+                q: false,
                 ..Default::default()
             },
             None,
             Some(tar_file.into()),
         );
 
-        while stream.next().await.is_some() {}
+        while let Some(info) = stream.next().await {
+            trace!("{:#?}", info);
+        }
 
         Ok(())
     }
