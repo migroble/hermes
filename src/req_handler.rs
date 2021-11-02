@@ -40,6 +40,53 @@ lazy_static! {
     static ref REPOS_DIR: String = env::var("REPOS_DIR").unwrap_or_else(|_| ".".to_string());
 }
 
+fn response(status: StatusCode) -> Result<Response<Body>> {
+    Ok(Response::builder()
+        .status(status)
+        .body(Body::empty())
+        .unwrap())
+}
+
+fn trigger_update(name: String, repo_url: String, tx: mpsc::Sender<Config>) {
+    let repo_path = [&REPOS_DIR, &name].iter().collect::<PathBuf>();
+
+    tokio::spawn(async move {
+        if let Err(why) = clone_or_fetch_repo(&SSH_KEY, &repo_url, &repo_path) {
+            error!(
+                "Failed to get repo {} ({} -> {:#?}): {:#?}",
+                name, repo_url, repo_path, why
+            );
+        }
+
+        if repo_path.join("Dockerfile").is_file() {
+            trace!("Building image: {}", name);
+            if let Err(why) = build_image(&DOCKER, &name, &repo_path).await {
+                error!("Failed to build image {}: {:#?}", name, why);
+            }
+
+            let config_path = [&CONFIGS_DIR, &name]
+                .iter()
+                .collect::<PathBuf>()
+                .with_extension("toml");
+            if config_path.is_file() {
+                trace!("Reading config {:#?}", config_path);
+                let config = Config::from_file(config_path).await.unwrap();
+
+                if name == PKG_NAME {
+                    trace!("Self-update triggered");
+                    tx.send(config).await.unwrap();
+                } else {
+                    if let Err(why) = stop_container(&DOCKER, &config).await {
+                        error!("Failed to stop container {}: {:#?}", name, why);
+                    } else if let Err(why) = run_container(&DOCKER, config).await {
+                        error!("Failed to start container {}: {:#?}", name, why);
+                    }
+                }
+            }
+        }
+    });
+}
+
 pub struct ReqHandler {
     tx: mpsc::Sender<Config>,
 }
@@ -58,60 +105,62 @@ impl Service<Request<Body>> for ReqHandler {
         Box::pin(async move {
             match *req.method() {
                 Method::POST => {
+                    trace!("Received POST request");
+
                     let headers = req.headers();
                     let get = move |key| Some(headers.get(key)?.to_str().ok()?.to_string());
+                    let headers = get("X-Hub-Signature-256").zip(get("X-GitHub-Event"));
+                    if headers.is_none() {
+                        trace!("Invalid headers");
+                        return response(StatusCode::BAD_REQUEST);
+                    }
 
-                    let git_sig = get("X-Hub-Signature-256").unwrap();
-                    let _event = get("X-Hub-Event").unwrap();
+                    let (git_sig, _event) = headers.unwrap();
+                    let buf = body::aggregate(req.into_body()).await;
+                    if buf.is_err() {
+                        trace!("Failed to aggregate buffer");
+                        return response(StatusCode::BAD_REQUEST);
+                    }
 
-                    let buf = body::aggregate(req.into_body()).await?;
+                    let buf = buf.unwrap();
                     let mut reader = buf.reader();
                     let mut body = String::new();
-                    reader.read_to_string(&mut body)?;
+                    // Fails if body contains invalid UTF-8
+                    if reader.read_to_string(&mut body).is_err() {
+                        trace!("Invalid UTF-8 in body");
+                        return response(StatusCode::BAD_REQUEST);
+                    }
 
                     let sig = HMAC::mac(body.as_bytes(), &SECRET);
-
-                    if git_sig[7..] == hex::encode(sig) {
-                        let data = json::parse(&body)?;
-
-                        let name = data["name"].as_str().unwrap();
-                        let repo_path = [&REPOS_DIR, name].iter().collect::<PathBuf>();
-                        clone_or_fetch_repo(
-                            &SSH_KEY,
-                            data["ssh_url"].as_str().unwrap(),
-                            &repo_path,
-                        )?;
-
-                        if repo_path.join("Dockerfile").is_file() {
-                            build_image(&DOCKER, name, &repo_path).await?;
-
-                            let config_path = [&CONFIGS_DIR, name]
-                                .iter()
-                                .collect::<PathBuf>()
-                                .with_extension("toml");
-                            if config_path.is_file() {
-                                let config = Config::from_file(config_path).await.unwrap();
-
-                                if name == PKG_NAME {
-                                    tx.send(config).await.unwrap();
-                                } else {
-                                    stop_container(&DOCKER, &config).await?;
-                                    run_container(&DOCKER, config).await?;
-                                }
-                            }
-                        }
-
-                        Ok(Response::new(Body::empty()))
-                    } else {
-                        let mut res = Response::default();
-                        *res.status_mut() = StatusCode::UNAUTHORIZED;
-                        Ok(res)
+                    if git_sig[7..] != hex::encode(sig) {
+                        trace!("Invalid signature");
+                        return response(StatusCode::UNAUTHORIZED);
                     }
+
+                    info!("Valid signature");
+                    let data = json::parse(&body);
+                    if data.is_err() {
+                        trace!("Failed parse JSON payload");
+                        return response(StatusCode::BAD_REQUEST);
+                    }
+
+                    let data = data.unwrap();
+                    let repo = &data["repository"];
+                    let params = repo["name"].as_str().zip(repo["ssh_url"].as_str());
+                    if params.is_none() {
+                        trace!("Invalid JSON data");
+                        return response(StatusCode::BAD_REQUEST);
+                    }
+
+                    let (name, repo_url) = params.unwrap();
+                    trigger_update(name.to_string(), repo_url.to_string(), tx);
+
+                    trace!("Ok!");
+                    response(StatusCode::OK)
                 }
                 _ => {
-                    let mut res = Response::default();
-                    *res.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
-                    Ok(res)
+                    trace!("Non-POST request discarded: {:#?}", req);
+                    response(StatusCode::METHOD_NOT_ALLOWED)
                 }
             }
         })
