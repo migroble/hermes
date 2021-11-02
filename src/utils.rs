@@ -57,9 +57,12 @@ pub mod git {
         let mut ro = RebaseOptions::new();
         ro.checkout_options(cb);
 
-        let rebase = repo
+        let mut rebase = repo
             .rebase(None, Some(&fetchhead), None, Some(&mut ro))
             .context(format!("unable to rebase {:#?}", path))?;
+        rebase
+            .finish(None)
+            .context(format!("unable to finish rebase on {:#?}", path))?;
         if rebase.len() == 0 {
             Ok(false)
         } else {
