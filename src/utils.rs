@@ -84,13 +84,16 @@ pub mod docker {
     use crate::config::Config;
     use anyhow::{Context, Result};
     use bollard::{
-        container::{Config as ContainerConfig, CreateContainerOptions, StartContainerOptions},
+        container::{
+            Config as ContainerConfig, CreateContainerOptions, ListContainersOptions,
+            StartContainerOptions,
+        },
         image::BuildImageOptions,
-        models::HostConfig,
+        models::{ContainerSummaryInner, HostConfig},
         Docker,
     };
     use futures::stream::StreamExt;
-    use std::path::Path;
+    use std::{collections::HashMap, path::Path};
     use tar::Builder;
 
     pub async fn build_image(docker: &Docker, name: &str, repo_path: &Path) -> Result<()> {
@@ -119,48 +122,74 @@ pub mod docker {
         Ok(())
     }
 
-    pub async fn stop_container(docker: &Docker, config: &Config) -> Result<()> {
+    pub async fn find_containers_with_image(
+        docker: &Docker,
+        name: &str,
+    ) -> Result<Vec<ContainerSummaryInner>> {
+        let lco = ListContainersOptions {
+            filters: {
+                let mut filters = HashMap::new();
+                filters.insert("ancestor", vec![name]);
+                filters
+            },
+            ..Default::default()
+        };
         docker
-            .stop_container(&config.name, None)
+            .list_containers(Some(lco))
             .await
-            .context(format!(
-                "unable to stop Docker container {:#?}",
-                config.name
-            ))?;
+            .context(format!("unable to list containers with image {}", name))
+    }
+
+    pub async fn stop_container(docker: &Docker, name: &str) -> Result<()> {
+        docker
+            .stop_container(&name, None)
+            .await
+            .context(format!("unable to stop Docker container {:#?}", name))?;
+        docker
+            .remove_container(&name, None)
+            .await
+            .context(format!("unable to remove Docker container {:#?}", name))?;
 
         Ok(())
     }
 
-    pub async fn run_container(docker: &Docker, config: Config, named: bool) -> Result<()> {
+    pub async fn run_container(docker: &Docker, config: Config) -> Result<()> {
+        let image = docker
+            .inspect_image(&config.name)
+            .await
+            .context(format!("unable to inspect Docker image {:#?}", config.name))?;
+        let image_config = image.config.unwrap_or_else(Default::default);
         let cc = ContainerConfig {
+            cmd: image_config.cmd,
+            entrypoint: image_config.entrypoint,
+            working_dir: image_config.working_dir,
+            image: Some(
+                image
+                    .repo_tags
+                    .map(|mut t| t.pop())
+                    .flatten()
+                    .unwrap_or(image.id),
+            ),
             env: config.env,
             host_config: Some(HostConfig {
                 binds: config.volumes,
-                port_bindings: None, // TODO: add port bindings to config
+                port_bindings: config.ports,
                 restart_policy: config.restart,
                 ..Default::default()
             }),
             ..Default::default()
         };
 
-        docker
-            .create_container(
-                if named {
-                    Some(CreateContainerOptions {
-                        name: config.name.clone(),
-                    })
-                } else {
-                    None
-                },
-                cc,
-            )
+        let id = docker
+            .create_container(None::<CreateContainerOptions<String>>, cc)
             .await
             .context(format!(
                 "unable to create Docker container {:#?}",
                 config.name
-            ))?;
+            ))?
+            .id;
         docker
-            .start_container(&config.name, None::<StartContainerOptions<String>>)
+            .start_container(&id, None::<StartContainerOptions<String>>)
             .await
             .context(format!(
                 "unable to start Docker container {:#?}",

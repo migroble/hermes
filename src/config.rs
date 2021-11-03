@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bollard::models::{RestartPolicy, RestartPolicyNameEnum};
+use bollard::models::{PortBinding, RestartPolicy, RestartPolicyNameEnum};
 use serde::{
     de::{self, MapAccess, Visitor},
     Deserialize, Deserializer,
@@ -14,6 +14,7 @@ pub struct Config {
     pub restart: Option<RestartPolicy>,
     pub env: Option<Vec<String>>,
     pub volumes: Option<Vec<String>>,
+    pub ports: Option<HashMap<String, Option<Vec<PortBinding>>>>,
 }
 
 impl Config {
@@ -27,6 +28,7 @@ impl Config {
                 restart: config.restart,
                 env: config.env,
                 volumes: config.volumes,
+                ports: config.ports,
             })
         }
         inner(path.as_ref()).await
@@ -39,6 +41,7 @@ struct ConfigInner {
     restart: Option<RestartPolicy>,
     env: Option<Vec<String>>,
     volumes: Option<Vec<String>>,
+    ports: Option<HashMap<String, Option<Vec<PortBinding>>>>,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +51,7 @@ enum ConfigInnerField {
     Restart,
     Env,
     Volumes,
+    Ports,
 }
 
 impl<'de> Deserialize<'de> for ConfigInner {
@@ -72,6 +76,7 @@ impl<'de> Deserialize<'de> for ConfigInner {
                 let mut restart = None;
                 let mut env = None;
                 let mut volumes = None;
+                let mut ports = None;
                 loop {
                     if let Ok(key_opt) = map.next_key() {
                         if let Some(key) = key_opt {
@@ -118,6 +123,30 @@ impl<'de> Deserialize<'de> for ConfigInner {
                                         vars.iter().map(|(k, v)| [k, ":", v].concat()).collect()
                                     });
                                 }
+                                ConfigInnerField::Ports => {
+                                    if ports.is_some() {
+                                        return Err(de::Error::duplicate_field("ports"));
+                                    }
+                                    let p: Option<HashMap<String, [String; 2]>> =
+                                        map.next_value()?;
+                                    ports = p.map(|p| {
+                                        let mut ports = HashMap::new();
+                                        p.iter().for_each(|(k, v)| {
+                                            ports
+                                                .entry(k.clone())
+                                                .or_insert_with(|| Some(Vec::new()))
+                                                .as_mut()
+                                                .and_then(|p| {
+                                                    p.push(PortBinding {
+                                                        host_ip: Some(v[0].clone()),
+                                                        host_port: Some(v[1].clone()),
+                                                    });
+                                                    Some(p)
+                                                });
+                                        });
+                                        ports
+                                    });
+                                }
                             }
                         } else {
                             break;
@@ -131,6 +160,7 @@ impl<'de> Deserialize<'de> for ConfigInner {
                     restart,
                     env,
                     volumes,
+                    ports,
                 })
             }
         }

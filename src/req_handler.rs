@@ -1,10 +1,10 @@
 use crate::{
     config::Config,
     utils::{
-        docker::{build_image, run_container, stop_container},
+        docker::{build_image, find_containers_with_image, run_container, stop_container},
         git::{clone_or_fetch_repo, KeyPair},
     },
-    DOCKER,
+    CONFIGS_DIR, DOCKER, PKG_NAME, REPOS_DIR,
 };
 use anyhow::Result;
 use hmac_sha256::HMAC;
@@ -23,8 +23,6 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-static PKG_NAME: &str = env!("CARGO_PKG_NAME");
-
 lazy_static! {
     static ref SECRET: Vec<u8> = env::var("SECRET_TOKEN")
         .expect("Expected a secret token in the environment")
@@ -36,8 +34,6 @@ lazy_static! {
 
         KeyPair { public, private }
     };
-    static ref CONFIGS_DIR: String = env::var("CONFIGS_DIR").unwrap_or_else(|_| ".".to_string());
-    static ref REPOS_DIR: String = env::var("REPOS_DIR").unwrap_or_else(|_| ".".to_string());
 }
 
 fn response(status: StatusCode) -> Result<Response<Body>> {
@@ -76,10 +72,27 @@ fn trigger_update(name: String, repo_url: String, tx: mpsc::Sender<Config>) {
                     trace!("Self-update triggered");
                     tx.send(config).await.unwrap();
                 } else {
-                    if let Err(why) = stop_container(&DOCKER, &config).await {
-                        error!("Failed to stop container {}: {:#?}", name, why);
-                    } else if let Err(why) = run_container(&DOCKER, config, true).await {
-                        error!("Failed to start container {}: {:#?}", name, why);
+                    let containers = find_containers_with_image(&DOCKER, &name).await;
+                    match containers {
+                        Ok(conts) => {
+                            for c in conts {
+                                if let Some(id) = c.id {
+                                    trace!("Stopping {} ({})", id, name);
+                                    if let Err(why) = stop_container(&DOCKER, &id).await {
+                                        error!("Failed to stop container {}: {:#?}", name, why);
+                                    }
+                                }
+                            }
+
+                            trace!("Running {}", name);
+                            if let Err(why) = run_container(&DOCKER, config).await {
+                                error!("Failed to start container {}: {:#?}", name, why);
+                            }
+                        }
+                        Err(why) => error!(
+                            "Failed to list containers with image name {}: {}",
+                            name, why
+                        ),
                     }
                 }
             }
